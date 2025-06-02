@@ -1,73 +1,41 @@
 import { connectToDatabase } from "../config/database.js";
 
-const validateURL = (url) => {
-  if (!url) return true;
-  const urlRegex = /^(https?:\/\/)?([\da-z.-]+)\.([a-z.]{2,6})([/\w.-]*)*\/?$/;
-  return urlRegex.test(url);
-};
-
-const validateSponsorFields = (fields) => {
-  const { sponsor_name, sponsor_description, website_url, is_active } = fields;
-  if (!sponsor_name || sponsor_name.length < 3) {
-    return "Sponsor name is required and must be at least 3 characters.";
-  }
-  if (sponsor_description && sponsor_description.length > 1000) {
-    return "Sponsor description cannot exceed 1000 characters.";
-  }
-  if (website_url && !validateURL(website_url)) {
-    return "Website URL must be a valid URL.";
-  }
-  if (
-    is_active !== undefined &&
-    ![true, false, "true", "false", 0, 1].includes(is_active)
-  ) {
-    return "is_active must be a boolean or 0/1.";
-  }
-  return null;
-};
-
 export const createSponsor = async (req, res) => {
-  if (req.user.isAdmin !== 1) {
-    return res
-      .status(403)
-      .json({ message: "Only admins can create sponsors." });
-  }
-
   const { sponsor_name, sponsor_description, website_url, is_active } =
     req.body;
   const sponsor_image = req.file
     ? `/uploads/sponsor_images/${req.file.filename}`
     : null;
 
-  const validationError = validateSponsorFields(req.body);
-  if (validationError) {
-    return res.status(400).json({ message: validationError });
+  if (!sponsor_name) {
+    return res.status(400).json({ message: "Sponsor name is required." });
   }
 
   try {
     const db = await connectToDatabase();
     const [userResult] = await db.execute(
-      "SELECT fullname FROM usermaster WHERE id = ?",
+      "SELECT fullname FROM userMaster WHERE id = ?",
       [req.user.id]
     );
+
     if (userResult.length === 0) {
       return res.status(400).json({ message: "User not found." });
     }
 
-    const entry_by = userResult[0].fullname || "unknown";
-    const activeStatus =
-      is_active === "true" || is_active === true || is_active === 1 ? 1 : 0;
+    const entry_by = userResult[0].fullname;
+    const activeStatus = is_active === "true" || is_active === true ? 1 : 0;
 
     const [result] = await db.execute(
       `INSERT INTO sponsor_master 
-       (sponsor_name, sponsor_description, sponsor_image, website_url, is_active, entry_by, entry_date)
-       VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+        (sponsor_name, sponsor_description, sponsor_image, website_url, is_active, entry_by, entry_date, updated_date, update_by)
+        VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW(), ?)`,
       [
         sponsor_name,
         sponsor_description || "No description provided",
         sponsor_image,
         website_url || null,
         activeStatus,
+        entry_by,
         entry_by,
       ]
     );
@@ -86,9 +54,7 @@ export const createSponsor = async (req, res) => {
 export const getAllSponsors = async (req, res) => {
   try {
     const db = await connectToDatabase();
-    const [sponsors] = await db.execute(
-      "SELECT * FROM sponsor_master WHERE is_active = 1"
-    );
+    const [sponsors] = await db.execute("SELECT * FROM sponsor_master");
     res.status(200).json(sponsors);
   } catch (error) {
     console.error("Error fetching sponsors:", error.message);
@@ -99,14 +65,10 @@ export const getAllSponsors = async (req, res) => {
 export const getSponsorById = async (req, res) => {
   const { sponsorId } = req.params;
 
-  if (!sponsorId || isNaN(sponsorId)) {
-    return res.status(400).json({ message: "Invalid sponsor ID." });
-  }
-
   try {
     const db = await connectToDatabase();
     const [sponsor] = await db.execute(
-      "SELECT * FROM sponsor_master WHERE sponsor_id = ? AND is_active = 1",
+      "SELECT * FROM sponsor_master WHERE sponsor_id = ?",
       [sponsorId]
     );
 
@@ -122,12 +84,6 @@ export const getSponsorById = async (req, res) => {
 };
 
 export const updateSponsor = async (req, res) => {
-  if (req.user.isAdmin !== 1) {
-    return res
-      .status(403)
-      .json({ message: "Only admins can update sponsors." });
-  }
-
   const { sponsorId } = req.params;
   const { sponsor_name, sponsor_description, website_url, is_active } =
     req.body;
@@ -135,40 +91,31 @@ export const updateSponsor = async (req, res) => {
     ? `/uploads/sponsor_images/${req.file.filename}`
     : null;
 
-  if (!sponsorId || isNaN(sponsorId)) {
-    return res.status(400).json({ message: "Invalid sponsor ID." });
-  }
-
-  const validationError = validateSponsorFields(req.body);
-  if (validationError) {
-    return res.status(400).json({ message: validationError });
-  }
-
   try {
     const db = await connectToDatabase();
     const [existingSponsor] = await db.execute(
-      "SELECT sponsor_image FROM sponsor_master WHERE sponsor_id = ? AND is_active = 1",
+      "SELECT * FROM sponsor_master WHERE sponsor_id = ?",
       [sponsorId]
     );
+
     if (existingSponsor.length === 0) {
       return res.status(404).json({ message: "Sponsor not found." });
     }
 
-    const update_by = req.user.fullname || "unknown";
-    const activeStatus =
-      is_active === "true" || is_active === true || is_active === 1 ? 1 : 0;
+    const update_by = req.user.fullname;
+    const activeStatus = is_active === "true" || is_active === true ? 1 : 0;
     const finalSponsorImage = sponsor_image || existingSponsor[0].sponsor_image;
 
     const [result] = await db.execute(
       `UPDATE sponsor_master 
-       SET sponsor_name = ?, sponsor_description = ?, sponsor_image = ?, website_url = ?, 
-           is_active = ?, update_by = ?, updated_date = NOW()
-       WHERE sponsor_id = ? AND is_active = 1`,
+        SET sponsor_name = ?, sponsor_description = ?, sponsor_image = ?, website_url = ?, 
+            is_active = ?, update_by = ?, updated_date = NOW()
+        WHERE sponsor_id = ?`,
       [
         sponsor_name,
-        sponsor_description || "No description provided",
+        sponsor_description,
         finalSponsorImage,
-        website_url || null,
+        website_url,
         activeStatus,
         update_by,
         sponsorId,
@@ -180,7 +127,7 @@ export const updateSponsor = async (req, res) => {
     }
 
     res.status(200).json({
-      message: "Sponsor updated successfully",
+      message: "Sponsor updated successfullyy",
       sponsorImage: finalSponsorImage,
     });
   } catch (error) {
